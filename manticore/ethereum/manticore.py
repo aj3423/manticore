@@ -1,41 +1,41 @@
 import binascii
+import io
 import json
 import logging
-from multiprocessing import Queue, Process
-from queue import Empty as EmptyQueue
-from typing import Dict, Optional, Union
-import io
+from multiprocessing import Process, Queue
 import pyevmasm as EVMAsm
+from queue import Empty as EmptyQueue
 import random
 import tempfile
 import time
+from typing import Dict, Optional, Union
 
 from crytic_compile import CryticCompile, InvalidCompilation, is_supported
 
 from ..core.manticore import ManticoreBase, ManticoreError
 
 from ..core.smtlib import (
-    ConstraintSet,
     Array,
     ArrayProxy,
     BitVec,
-    Operators,
     BoolConstant,
+    ConstraintSet,
     Expression,
-    issymbolic,
+    Operators,
     SelectedSolver,
+    issymbolic,
 )
 from ..core.state import AbandonState
-from .account import EVMContract, EVMAccount, ABI
-from .detectors import Detector
-from .solidity import SolidityMetadata
-from .state import State
-from ..exceptions import EthereumError, DependencyError, NoAliveStates
+from ..exceptions import DependencyError, EthereumError, NoAliveStates
 from ..platforms import evm
 from ..utils import config
 from ..utils.deprecated import deprecated
 from ..utils.enums import Sha3Type
 from ..utils.helpers import PickleSerializer, printable_bytes
+from .account import ABI, EVMAccount, EVMContract
+from .detectors import Detector
+from .solidity import SolidityMetadata
+from .state import State
 
 logger = logging.getLogger(__name__)
 logging.getLogger("CryticCompile").setLevel(logging.ERROR)
@@ -278,29 +278,38 @@ class ManticoreEVM(ManticoreBase):
             for compilation_unit in crytic_compile.compilation_units.values():
 
                 if not contract_name:
-                    if len(compilation_unit.contracts_names_without_libraries) > 1:
+                    count = 0
+                    for source_unit in compilation_unit.source_units.values():
+                        if contract_name in source_unit.contracts_names_without_libraries:
+                            count += 1
+                    if count > 1:
                         raise EthereumError(
                             f"Solidity file must contain exactly one contract or you must select one. Contracts found: {', '.join(compilation_unit.contracts_names)}"
                         )
-                    contract_name = list(compilation_unit.contracts_names_without_libraries)[0]
+                    contract_name = list(source_unit.contracts_names_without_libraries)[0]
 
-                if contract_name not in compilation_unit.contracts_names:
+                source_unit = None
+                for source_unit in compilation_unit.source_units.values():
+                    if contract_name in source_unit.contracts_names:
+                        break
+
+                if source_unit == None:
                     raise ValueError(f"Specified contract not found: {contract_name}")
 
                 name = contract_name
 
-                libs = compilation_unit.libraries_names(name)
+                libs = source_unit.libraries_names(name)
                 if libraries:
                     libs = [l for l in libs if l not in libraries]
                 if libs:
                     raise DependencyError(libs)
 
-                bytecode = bytes.fromhex(compilation_unit.bytecode_init(name, libraries))
-                runtime = bytes.fromhex(compilation_unit.bytecode_runtime(name, libraries))
-                srcmap = compilation_unit.srcmap_init(name)
-                srcmap_runtime = compilation_unit.srcmap_runtime(name)
-                hashes = compilation_unit.hashes(name)
-                abi = compilation_unit.abi(name)
+                bytecode = bytes.fromhex(source_unit.bytecode_init(name, libraries))
+                runtime = bytes.fromhex(source_unit.bytecode_runtime(name, libraries))
+                srcmap = source_unit.srcmap_init(name)
+                srcmap_runtime = source_unit.srcmap_runtime(name)
+                hashes = source_unit.hashes(name)
+                abi = source_unit.abi(name)
 
                 filename = None
                 for _fname, contracts in compilation_unit.filename_to_contracts.items():
